@@ -1,0 +1,13 @@
+pandas
+streamlit
+langchain-community
+faiss-cpu
+numpy
+langchain_google_genai
+pymupdf
+sentence-transformers
+google-generativeai
+python-dotenv
+langchain-text-splitters
+altair==4.2.2
+rich

@@ -1,44 +1,10 @@
-# ----------------------------
-# Python compatibility
-# ----------------------------
-pydantic==1.10.14
-
-# ----------------------------
-# LangChain (compatible set)
-# ----------------------------
-langchain==0.1.20
-langchain-core==0.1.52
-langchain-community==0.0.29
-langchain-google-genai==0.0.12
-langchain-text-splitters==0.0.1
-
-# ----------------------------
-# Vectorstore & Embeddings
-# ----------------------------
-faiss-cpu==1.7.4
-sentence-transformers==2.2.2
-
-# ----------------------------
-# Google Gemini API
-# ----------------------------
-google-generativeai==0.3.2
-
-# ----------------------------
-# Utilities
-# ----------------------------
-python-dotenv==1.0.1
-numpy==1.26.4
-pandas==2.1.4
-pymupdf==1.23.7
-
-# ----------------------------
-# Streamlit UI
-# ----------------------------
-streamlit==1.33.0
-altair==4.2.2
-rich==13.7.1
-
-# ----------------------------
-# Torch CPU
-# ----------------------------
-torch==2.1.2
+langchain
+langchain-community
+langchain-huggingface
+huggingface_hub
+langchain_huggingface
+pydantic
+chromadb
+langchain-google-genai
+torch
+python-dotenv

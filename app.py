@@ -1,172 +1,113 @@
-import streamlit as st
 import os
-import torch
 from dotenv import load_dotenv
 load_dotenv()
+
+import streamlit as st
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
-# -------------------------------------------------------------
-# Streamlit Settings
-# ------------------------------------stream-------------------------
-st.set_page_config(page_title="SystemVerilog RAG Chatbot", layout="wide")
+st.set_page_config(page_title="SystemVerilog RAG Chatbot (Chroma, optimized)", layout="wide")
 st.title("🤖 SystemVerilog Documentation Chatbot")
 
-# -------------------------------------------------------------
-# Environment Variables
-# -------------------------------------------------------------
-for var in ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"]:
-    if var in os.environ:
-        del os.environ[var]
 os.environ["HUGGINGFACEHUB_API_TOKEN"] = os.getenv("HUGGINGFACEHUB_API_TOKEN", "")
 os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY", "")
 
-torch.set_default_device("cpu")
-
-# -------------------------------------------------------------
-# CACHED — Load Text Document Once
-# -------------------------------------------------------------
-@st.cache_resource
-def load_text():
-    with open("pdf_extracted_text.txt", "r", encoding="utf-8") as f:
+@st.cache_data
+def load_text_file(path="pdf_extracted_text.txt"):
+    with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
-text_data = load_text()
+text_data = load_text_file()
 
-# -------------------------------------------------------------
-# CACHED — Text Splitter
-# -------------------------------------------------------------
 @st.cache_resource
-def split_text(text):
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
-    )
-    return splitter.split_text(text)
+def get_text_chunks():
+    splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=100)
+    return splitter.split_text(text_data)
 
-docs = split_text(text_data)
+docs = get_text_chunks()
 
-# -------------------------------------------------------------
-# CACHED — Embedding Model (SUPER Important)
-# -------------------------------------------------------------
 @st.cache_resource
-def load_embedding_model():
-    return HuggingFaceEmbeddings(model="mixedbread-ai/mxbai-embed-large-v1")
+def get_embedding_model():
+    return HuggingFaceEmbeddings(model_name="intfloat/e5-base")
 
-emb = load_embedding_model()
+emb = get_embedding_model()
 
-# -------------------------------------------------------------
-# CACHED — Chroma DB
-# -------------------------------------------------------------
 @st.cache_resource
-def load_chroma(embeddings):
-    db = Chroma(
-        collection_name="verilog",
-        embedding_function=embeddings,
-        persist_directory="chroma.db",
-    )
+def get_chroma():
+    persist_dir = "chroma.db"
+    db = Chroma(collection_name="verilog", embedding_function=emb, persist_directory=persist_dir)
 
-    # Only add if database is empty
+    count = 0
     try:
-        existing = db.get()
-        if len(existing["documents"]) == 0:
-            db.add_texts(docs)
-    except:
-        db.add_texts(docs)
+        count = db._collection.count()
+    except Exception:
+        try:
+            info = db.get()
+            count = len(info.get("documents", []))
+        except Exception:
+            count = 0
 
+    if count == 0:
+        db.add_texts(docs)
+        try:
+            db.persist()
+        except Exception:
+            pass
     return db
 
-data_base = load_chroma(emb)
+db = get_chroma()
 
-# -------------------------------------------------------------
-# Chat Model
-# -------------------------------------------------------------
-chat = ChatGoogleGenerativeAI(
-    model="gemini-2.0-flash",
-    temperature=0.3
-)
+chat = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.25)
 
-# -------------------------------------------------------------
-# Chat History
-# -------------------------------------------------------------
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
+if "max_history" not in st.session_state:
+    st.session_state.max_history = 10
 
-# -------------------------------------------------------------
-# Chat Input
-# -------------------------------------------------------------
-user_query = st.chat_input("Ask a SystemVerilog question (answers only from your document!)")
+col1, col2 = st.columns([3, 1])
+
+with col2:
+    if st.button("Rebuild Chroma DB (force)"):
+        try:
+            db._collection.reset()
+        except Exception:
+            try:
+                db.delete_collection()
+            except Exception:
+                pass
+        db.add_texts(docs)
+        try:
+            db.persist()
+            st.success("Chroma DB rebuilt and persisted.")
+        except Exception:
+            st.warning("Chroma rebuilt but persist failed (check permissions).")
+
+with col1:
+    user_query = st.chat_input("Ask a SystemVerilog question (answers strictly from the document)")
 
 if user_query:
+    retriever_docs = db.similarity_search(user_query, k=5)
+    context = "\n\n".join(getattr(d, "page_content", str(d)) for d in retriever_docs)
 
-    retriever = data_base.similarity_search(user_query, k=5)
-    context = "".join(doc.page_content for doc in retriever[:5])
-
-    # STRICT RAG PROMPT
     prompt = f"""
-You are an expert **SystemVerilog Verification Engineer**, **technical author**, and **educator** with over 20 years of experience in digital design and verification.
+You are an expert SystemVerilog Verification Engineer, technical author, and educator.
 
-Your output MUST be strictly grounded in the retrieved document context.
+You MUST use ONLY the retrieved context for all technical content.
 
 -----------------------------------------------------
-📘 Retrieved Context (from RAG system):
+Retrieved Context:
 {context}
 -----------------------------------------------------
 
-❓ User Query:
+User Query:
 {user_query}
 
------------------------------------------------------
-🧠 STRICT TASK RULES (READ CAREFULLY)
-
-1. PRIMARY REQUIREMENT — RAG-ONLY ANSWERING
-   - **Use ONLY the retrieved context** for all technical content.
-   - If the answer requires information not present in the context:
-     → Respond with: **"Insufficient document context to answer."**
-   - DO NOT use your own knowledge, memory, or assumptions.
-
-2. CONTENT HANDLING
-   - If context chunks break sentences or code, merge them logically.
-   - Only reorganize, reformat, or clarify what already exists.
-   - NO new concepts, NO new definitions, NO external SystemVerilog knowledge.
-
-3. ALLOWED USE OF EXPERTISE
-   (Only for improving existing context — NOT adding new content)
-   - Reformat SystemVerilog code for readability.
-   - Fix syntax errors in context code.
-   - Complete truncated code **only when the missing part is implied**.
-   - Reconstruct minimal code to match given output (if output appears in context).
-   *Never add features or logic not traceable to the context.*
-
-4. CODE & OUTPUT RULES
-   - If code + output exist in context → present both exactly.
-   - If only output exists → reconstruct minimal SystemVerilog code.
-   - Label reconstructed code as: **(Reconstructed Based on Output Behavior)**
-   - Show outputs in fenced 
-Output
- blocks.
-
-5. SECTION / SAMPLE IDENTIFICATION
-   - If context includes Section, Example, Sample labels → include them.
-   - If multiple → list all.
-   - If none → skip.
-
-6. FORMAT OF FINAL ANSWER (REQUIRED)
-   Your response MUST follow this structure:
-
-   **📄 Section Reference:** Section <no> / Sample <no> / Derived from Chunk <no(s)>
-
-   **Document-Based Explanation**
-   <Strictly derived from context>
-
-   **Code Examples**
-   
-systemverilog
-   <Code from context or reconstructed>
+If the answer cannot be found in the retrieved context, respond exactly:
+"Insufficient document context to answer."
 """
 
     messages = [
@@ -174,22 +115,20 @@ systemverilog
         HumanMessage(content=user_query),
     ]
 
-    response = chat.invoke(messages)
+    try:
+        response = chat.invoke(messages)
+        assistant_text = response.content
+    except Exception as e:
+        assistant_text = "Error invoking chat model."
 
-    st.session_state.chat_history.append(
-        {"role": "user", "content": user_query}
-    )
-    st.session_state.chat_history.append(
-        {"role": "assistant", "content": response.content}
-    )
+    st.session_state.chat_history.append({"role": "user", "content": user_query})
+    st.session_state.chat_history.append({"role": "assistant", "content": assistant_text})
 
-# -------------------------------------------------------------
-# UI — Display Chat History
-# -------------------------------------------------------------
+    if len(st.session_state.chat_history) > st.session_state.max_history * 2:
+        st.session_state.chat_history = st.session_state.chat_history[-st.session_state.max_history * 2 :]
+
 for msg in st.session_state.chat_history:
-    if msg["role"] == "user":
-        with st.chat_message("user"):
-            st.markdown(msg["content"])
-    else:
-        with st.chat_message("assistant"):
-            st.markdown(msg["content"])
+    role = msg["role"]
+    content = msg["content"]
+    with st.chat_message(role):
+        st.markdown(content)

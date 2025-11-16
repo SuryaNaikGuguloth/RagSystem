@@ -8,3 +8,5 @@ chromadb
 langchain-google-genai
 torch
 python-dotenv
+sentence-transformers
+transformers
